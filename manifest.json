@@ -1,0 +1,31 @@
+{
+    "name": "olmocr2",
+    "url": "https://github.com/harpreetsahota204/olmOCR-2",
+    "models": [
+        {
+            "base_name": "allenai/olmOCR-2-7B-1025",
+            "base_filename": "olmOCR-2-7B-1025",
+            "author": "AllenAI",
+            "license": "Apache 2.0",
+            "source": "https://huggingface.co/allenai/olmOCR-2-7B-1025",
+            "description": "olmOCR-2 is an advanced OCR model from AllenAI that uses Qwen2.5-VL architecture for document text extraction. Returns markdown output with YAML front matter containing document metadata (language, rotation, tables, diagrams). Converts equations to LaTeX and tables to HTML.",
+            "tags": [
+                "ocr",
+                "document-understanding",
+                "VLM",
+                "vision-language"
+            ],
+            "date_added": "2025-10-24",
+            "requirements": {
+                "packages": ["huggingface-hub", "transformers", "torch", "Pillow", "numpy"],
+                "cpu": {
+                    "support": true
+                },
+                "gpu": {
+                    "support": true
+                }
+            }
+        }
+    ]
+}
+
