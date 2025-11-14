@@ -4,10 +4,12 @@ import io
 import warnings
 from contextlib import contextmanager
 from typing import Union
+import re
 
 from PIL import Image
 import numpy as np
 import torch
+import yaml
 
 import fiftyone as fo
 from fiftyone import Model, SamplesMixin
@@ -58,7 +60,13 @@ class OlmOCR2(Model, SamplesMixin):
     """FiftyOne model for olmOCR-2 vision-language OCR tasks.
     
     Advanced OCR model that extracts text from documents using Qwen2.5-VL architecture.
-    Returns markdown output with YAML front matter containing metadata about the document.
+    Automatically parses YAML front matter and returns multiple fields in one inference pass:
+    - text: Main OCR content (markdown)
+    - primary_language: Detected language (Classification)
+    - is_rotation_valid: Whether orientation is correct (Classification)
+    - rotation_correction: Suggested rotation degrees (numeric)
+    - is_table: Whether document contains tables (Classification)
+    - is_diagram: Whether document contains diagrams (Classification)
     
     Automatically selects optimal dtype based on hardware:
     - bfloat16 for CUDA devices with compute capability 8.0+ (Ampere and newer)
@@ -72,6 +80,12 @@ class OlmOCR2(Model, SamplesMixin):
         max_new_tokens: Maximum tokens to generate (default: 4096)
         temperature: Temperature for sampling (default: 0.1)
         torch_dtype: Override automatic dtype selection
+    
+    Example:
+        >>> model = OlmOCR2()
+        >>> dataset.apply_model(model, label_field="ocr")
+        >>> # Creates: sample.ocr_text, sample.ocr_primary_language, 
+        >>> #          sample.ocr_is_table, sample.ocr_is_diagram, etc.
     """
     
     def __init__(
@@ -124,6 +138,32 @@ class OlmOCR2(Model, SamplesMixin):
     def media_type(self):
         """The media type processed by this model."""
         return "image"
+    
+    def _parse_frontmatter(self, text: str) -> tuple[dict, str]:
+        """Parse YAML front matter from markdown text.
+        
+        Args:
+            text: Markdown text with optional YAML front matter
+            
+        Returns:
+            tuple: (metadata_dict, content_without_frontmatter)
+        """
+        # Match YAML front matter pattern: ---\n...content...\n---
+        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n(.*)$'
+        match = re.match(frontmatter_pattern, text, re.DOTALL)
+        
+        if match:
+            try:
+                yaml_content = match.group(1)
+                main_content = match.group(2)
+                metadata = yaml.safe_load(yaml_content) or {}
+                return metadata, main_content
+            except yaml.YAMLError as e:
+                logger.warning(f"Failed to parse YAML front matter: {e}")
+                return {}, text
+        
+        # No front matter found
+        return {}, text
     
     def _predict(self, image: Image.Image, sample) -> str:
         """Process image through olmOCR-2.
@@ -198,8 +238,51 @@ class OlmOCR2(Model, SamplesMixin):
             sample: FiftyOne sample containing the image filepath
         
         Returns:
-            str: Extracted text from the document with YAML front matter
+            dict: Dictionary with multiple fields:
+                - text: Main OCR content
+                - primary_language: Classification with detected language
+                - is_rotation_valid: Classification (valid/invalid)
+                - rotation_correction: Numeric rotation value
+                - is_table: Classification (true/false)
+                - is_diagram: Classification (true/false)
         """
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
-        return self._predict(image, sample)
+        
+        # Get raw model output
+        raw_output = self._predict(image, sample)
+        
+        # Parse front matter
+        metadata, text_content = self._parse_frontmatter(raw_output)
+        
+        # Build result dictionary with multiple fields
+        result = {
+            "text": text_content.strip()
+        }
+        
+        # Add metadata fields as Classifications
+        if "primary_language" in metadata:
+            result["primary_language"] = fo.Classification(
+                label=str(metadata["primary_language"])
+            )
+        
+        if "is_rotation_valid" in metadata:
+            # Convert boolean to string label
+            label = str(metadata["is_rotation_valid"]).lower()
+            result["is_rotation_valid"] = fo.Classification(label=label)
+        
+        if "rotation_correction" in metadata:
+            # Store as plain numeric value
+            result["rotation_correction"] = metadata["rotation_correction"]
+        
+        if "is_table" in metadata:
+            # Convert boolean to string label
+            label = str(metadata["is_table"]).lower()
+            result["is_table"] = fo.Classification(label=label)
+        
+        if "is_diagram" in metadata:
+            # Convert boolean to string label
+            label = str(metadata["is_diagram"]).lower()
+            result["is_diagram"] = fo.Classification(label=label)
+        
+        return result
